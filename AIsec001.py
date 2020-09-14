@@ -13,22 +13,28 @@ import json
 import matplotlib.pyplot as plt
 
 '''
-instructions：python test.py image1_path  trigger_path
-e.g.  python test.py ./image1 ./image2
+使用说明:python test.py image1_path  trigger_path
+例如:python test.py ./image1.png ./image2.jpg
 
-image1_path:clean image path
-trigger_path:target image path
+image1_path:干净图片所在路径
+trigger_path:目标图片所在路径
 
-environment configure:
+环境配置:
 python 3.5
 tensorflow 1.13
 '''
 
 def main(argv):
+
+    #输入异常处理
+    if len(argv)!=3:
+        print('请按照如下格式调用程序:AIsec001.py image1_path image2_path')
+        sys.exit(0)
+
     print(argv[1],type(argv[1]))
     print(argv[2],type(argv[2]))
 
-    # deal with image 1,
+    #对干净图片image1进行预处理
     img_path = argv[1]
     img_class = 500
     img = PIL.Image.open(img_path)
@@ -39,7 +45,7 @@ def main(argv):
     img = img.resize((new_w, new_h)).crop((0, 0, 299, 299))
     img = (np.asarray(img) / 255.0).astype(np.float32)
 
-    # deal with image 2
+    #对目标图片image2进行预处理
     img2_path = argv[2]
     img2 = PIL.Image.open(img2_path)
     img2 = img2.convert("RGB")
@@ -54,7 +60,7 @@ def main(argv):
 
     image = tf.Variable(tf.zeros((299, 299, 3)))
 
-    #load inception model
+    #加载inception模型
     def inception(image, reuse):
         preprocessed = tf.multiply(tf.subtract(tf.expand_dims(image, 0), 0.5), 2.0)
         arg_scope = nets.inception.inception_v3_arg_scope(weight_decay=0.0)
@@ -67,7 +73,7 @@ def main(argv):
 
     logits, probs = inception(image, reuse=False)
 
-    #load model's weight
+    #加载模型参数
     data_dir = tempfile.mkdtemp()
     inception_tarball, _ = urlretrieve('http://download.tensorflow.org/models/inception_v3_2016_08_28.tar.gz')
     tarfile.open(inception_tarball, 'r:gz').extractall(data_dir)
@@ -80,7 +86,7 @@ def main(argv):
     saver.restore(sess, os.path.join(data_dir, 'inception_v3.ckpt'))
 
 
-    #show the imaget
+    #显示图片
     imagenet_json, _ = urlretrieve('http://www.anishathalye.com/media/2017/07/25/imagenet.json')
 
     with open(imagenet_json) as f:
@@ -110,13 +116,13 @@ def main(argv):
         return p
 
 
-    #test image1 and image2
+    #测试image1和image2
     p=classify(img)
     p2=classify(img2)
     #print (np.argmin(p),type(img),np.shape(img))#751 <class 'numpy.ndarray'> (299, 299, 3)
     #print(np.shape(p))#(1000,)
 
-    #initial to generate adversarial sample
+    #初始化生成对抗样本
     x = tf.placeholder(tf.float32, (299, 299, 3))
 
     x_hat = image # our trainable adversarial input
@@ -124,23 +130,22 @@ def main(argv):
     learning_rate = tf.placeholder(tf.float32, ())
     y_tar = tf.placeholder(tf.float32, (1000,))
 
-    #define loss, loss_ssim is uesd to constrain the human eye's perception of the disturbance
+    #定义优化目标，loss_ssim用于约束人眼对扰动的感知程度
     x_initial = tf.constant(img)
     loss_ssim=(1-tf.reduce_mean(tf.image.ssim(x_hat,x_initial,max_val=1.0)))/2.0
     loss_ssim=tf.reshape(loss_ssim,shape=(1,))
     loss_ssim=tf.square(loss_ssim)
 
-    #loss1 is uesd to constrain tha attack target labeil
-    #in 'Hidden Trigger Backdoor Attacks', author use the feature's distance as the loss,
-    #here we simply achieve a target attack with target sample's feature in the last layer
-    #if you want to achieve a more complex backdoor attack using adversarial samples
-    #you can read the author's code or train a new model by yourself.
+    #loss1用于约束对抗生成的目标软标签
+    #在'Hidden Trigger Backdoor Attacks'中，作者使用卷积后提取的特征距离作为优化目标中的一项
+    #这里我们简化了这一过程，使用目标样本在最后一层所得到的特征作为对抗生成的目标
+    #如果你希望利用对抗样本实现更为复杂的后门攻击，可以参考上述论文的方法，重新自定义模型并训练
     loss1 = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=y_tar)
     loss = loss_ssim+loss1
 
     optim_step = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, var_list=[x_hat])
 
-    #projected gradient descent
+    #投影梯度下降方法生成对抗样本
     epsilon = tf.placeholder(tf.float32, ())
 
     below = x - epsilon
@@ -149,30 +154,29 @@ def main(argv):
     with tf.control_dependencies([projected]):
         project_step = tf.assign(x_hat, projected)
 
-    demo_epsilon = 2.0 / 255.0  # a really small perturbation
+    #定义一个非常小的扰动
+    demo_epsilon = 2.0 / 255.0
     demo_lr = 0.1
     demo_steps = 200
-    demo_target = np.argmin(p)  # 最远target
 
-    # initialization step
+    #执行初始化步骤
     sess.run(assign_op, feed_dict={x: img})
 
-    # projected gradient descent
     for i in range(demo_steps):
-        # gradient descent step
+        #梯度下降步骤
         _, loss_value , logits_value,ssim_value= sess.run(
             [optim_step, loss ,loss1,loss_ssim],
             feed_dict={learning_rate: demo_lr, y_tar:p2})
-        # project step
+        #投影步骤
         sess.run(project_step, feed_dict={x: img, epsilon: demo_epsilon})
         if (i + 1) % 10 == 0:
             print('step %d, loss=%g' % (i + 1, loss_value))
 
-    adv = x_hat.eval()  # retrieve the adversarial example
+    #测试对抗样本
+    adv = x_hat.eval()
+    classify(adv)
 
-    classify(adv, correct_class=img_class, target_class=demo_target)
-
-    #save adversarial image
+    #保存生成的对抗样本图片
     imsave('adv_image' + '.png', adv)
 
 if __name__ == "__main__":
