@@ -7,7 +7,7 @@ python 3.6
 tensorflow 1.13.1
 
 # 使用说明
-git clone url
+在配置好环境后，在.py文件所在目录下输入如下命令:
 python AIsec001.py image1_path image2_path
 image1_path:干净图片
 image2_path:目标图片
