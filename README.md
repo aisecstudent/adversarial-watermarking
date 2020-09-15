@@ -8,6 +8,6 @@ tensorflow 1.13.1
 
 # 使用说明
 git clone url
-python xx.py image1_path image2_path
+python AIsec001.py image1_path image2_path
 image1_path:干净图片
 image2_path:目标图片
